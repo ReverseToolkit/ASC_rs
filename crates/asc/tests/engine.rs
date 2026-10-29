@@ -671,6 +671,33 @@ fn cached_dex_entries_with_colliding_sanitized_names_stay_distinct() {
 }
 
 #[test]
+fn cli_reports_an_invalid_float_encoding_without_panicking() {
+    let mut data = support::make_field_dex();
+    let class_off =
+        usize::try_from(u32::from_le_bytes(data[0x64..0x68].try_into().unwrap())).unwrap();
+    let values_off = u32::try_from(data.len()).unwrap();
+    data[class_off + 28..class_off + 32].copy_from_slice(&values_off.to_le_bytes());
+    data.extend_from_slice(&[1, 0x90, 0, 0, 0, 0, 0]);
+    let file_size = u32::try_from(data.len()).unwrap();
+    data[0x20..0x24].copy_from_slice(&file_size.to_le_bytes());
+    let dir = std::env::temp_dir().join(format!("asc-invalid-float-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("classes.dex");
+    std::fs::write(&path, data).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_asc"))
+        .arg("getclass")
+        .arg(path)
+        .args(["Lexample/Test;", "--engine", "smali", "--no-cache"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("value_arg"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn ddc_getclass_prints_structured_java() {
     let dir = std::env::temp_dir().join(format!("asc-ddc-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

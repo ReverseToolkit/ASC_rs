@@ -382,7 +382,17 @@ impl<'a> Dex<'a> {
             .get(pos)
             .ok_or_else(|| crate::Error::new("truncated encoded value"))?;
         let value_type = header & 0x1f;
-        let value_arg = (header >> 5) as usize;
+        let value_arg = usize::from(header >> 5);
+        let max_arg = match value_type {
+            0x00 | 0x1c | 0x1d | 0x1e => 0,
+            0x02 | 0x03 | 0x1f => 1,
+            0x04 | 0x10 | 0x15..=0x1b => 3,
+            0x06 | 0x11 => 7,
+            _ => bail!("invalid encoded value type {value_type:#x}"),
+        };
+        if value_arg > max_arg {
+            bail!("invalid value_arg {value_arg} for encoded value type {value_type:#x}");
+        }
         let body = pos + 1;
         let unsigned = |nbytes: usize| -> Result<u64> {
             let raw = self
@@ -392,6 +402,10 @@ impl<'a> Dex<'a> {
             let mut buf = [0u8; 8];
             buf[..nbytes].copy_from_slice(raw);
             Ok(u64::from_le_bytes(buf))
+        };
+        let unsigned32 = |nbytes: usize| -> Result<u32> {
+            u32::try_from(unsigned(nbytes)?)
+                .map_err(|_| crate::Error::new("encoded value exceeds u32"))
         };
         let signed = |nbytes: usize| -> Result<i64> {
             let raw = self
@@ -419,7 +433,7 @@ impl<'a> Dex<'a> {
             }
             0x10 => {
                 let nbytes = value_arg + 1;
-                let bits = (unsigned(nbytes)? as u32) << (8 * (4 - nbytes));
+                let bits = unsigned32(nbytes)? << (8 * (4 - nbytes));
                 Ok((format!("{}", f32::from_bits(bits)), 1 + nbytes))
             }
             0x11 => {
@@ -429,18 +443,18 @@ impl<'a> Dex<'a> {
             }
             0x17 => {
                 let nbytes = value_arg + 1;
-                let idx = unsigned(nbytes)? as u32;
+                let idx = unsigned32(nbytes)?;
                 Ok((java_quote(&self.string(idx)?), 1 + nbytes))
             }
             0x15 => {
                 let nbytes = value_arg + 1;
-                let idx = unsigned(nbytes)? as u32;
+                let idx = unsigned32(nbytes)?;
                 let proto = self.proto(idx)?;
                 Ok((self.string(proto.shorty_idx)?, 1 + nbytes))
             }
             0x18 => {
                 let nbytes = value_arg + 1;
-                let idx = unsigned(nbytes)? as u32;
+                let idx = unsigned32(nbytes)?;
                 Ok((
                     format!("{}.class", java_type(&self.type_desc(idx)?)),
                     1 + nbytes,
