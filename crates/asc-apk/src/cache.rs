@@ -194,8 +194,13 @@ impl DiskCache {
         let safe: String = entry_name
             .chars()
             .map(|ch| if is_key_char(ch) { ch } else { '_' })
+            .take(STEM_MAX)
             .collect();
-        self.dir.join(key.as_str()).join(safe)
+        let hash = fnv64(entry_name.as_bytes());
+        // The version prefix excludes legacy entries whose names could collide.
+        self.dir
+            .join(key.as_str())
+            .join(format!("v2-{safe}-{hash:0HASH_HEX_LEN$x}"))
     }
 
     fn ensure_tag(&self) -> Result<(), CacheError> {
@@ -261,6 +266,21 @@ impl DiskCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_entries_are_not_reused() {
+        let root = std::env::temp_dir().join(format!("asc-cache-legacy-{}", std::process::id()));
+        let cache = DiskCache::open(&root);
+        let key = ApkKey::new(Path::new("app.apk"), 3, 1, b"cd");
+        let legacy_dir = root.join(key.as_str());
+        fs::create_dir_all(&legacy_dir).unwrap();
+        fs::write(legacy_dir.join("classes.dex"), b"bad").unwrap();
+
+        assert_eq!(cache.get(&key, "classes.dex", 3), None);
+        cache.put(&key, "classes.dex", b"dex").unwrap();
+        assert_eq!(cache.get(&key, "classes.dex", 3), Some(b"dex".to_vec()));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn put_then_get_roundtrips_and_a_foreign_directory_is_refused() {

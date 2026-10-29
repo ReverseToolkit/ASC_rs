@@ -645,6 +645,32 @@ fn aab_duplicate_class_prefers_base_then_classes_ordinal() {
 }
 
 #[test]
+fn cached_dex_entries_with_colliding_sanitized_names_stay_distinct() {
+    let base = support::make_class_only_dex(&["Lexample/Test;"], 0, b"035");
+    let extra = support::make_class_only_dex(&["Lexample/Best;"], 0, b"035");
+    assert_eq!(base.len(), extra.len());
+    let dir = std::env::temp_dir().join(format!("asc-cache-names-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let aab = write_apk(
+        &dir,
+        "app.aab",
+        &[
+            ("base/dex/classes.dex", base.as_slice()),
+            ("base_dex_classes.dex", extra.as_slice()),
+        ],
+        false,
+    );
+    let expected = list_classes(&aab, None, &opts(1)).unwrap();
+    assert_eq!(expected, vec!["Lexample/Test;", "Lexample/Best;"]);
+    let mut cached = opts(1);
+    cached.cache_dir = Some(dir.join("cache"));
+    assert_eq!(list_classes(&aab, None, &cached).unwrap(), expected);
+    cached.threads = 2;
+    assert_eq!(list_classes(&aab, None, &cached).unwrap(), expected);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn ddc_getclass_prints_structured_java() {
     let dir = std::env::temp_dir().join(format!("asc-ddc-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
