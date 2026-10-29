@@ -73,7 +73,7 @@ impl Archive {
             path: self.path.clone(),
             source,
         })?;
-        let limit = item.entry.size.clamp(1, 512 * 1024 * 1024);
+        let limit = item.entry.size.min(512 * 1024 * 1024);
         inflate_entry(&map, item, limit)
     }
 
@@ -139,35 +139,76 @@ fn inflate_entry(apk: &[u8], item: &Stored, limit: u64) -> Result<Vec<u8>> {
     }
     let off = usize::try_from(item.local_header_offset)
         .map_err(|_| Error::new(format!("zip offset for {} is too large", item.entry.name)))?;
-    let name_len = usize::from(u16_at(apk, off + 26)?);
-    let extra_len = usize::from(u16_at(apk, off + 28)?);
-    let data_off = off + 30 + name_len + extra_len;
-    let comp_len = usize::try_from(item.compressed_size).unwrap_or(usize::MAX);
+    let header_end = off
+        .checked_add(30)
+        .ok_or_else(|| Error::new(format!("zip offset for {} is too large", item.entry.name)))?;
+    let header = apk
+        .get(off..header_end)
+        .ok_or_else(|| Error::new(format!("truncated local header for {}", item.entry.name)))?;
+    if &header[..4] != b"PK\x03\x04" {
+        bail!("bad local header signature for {}", item.entry.name);
+    }
+    let name_len = usize::from(u16_at(header, 26)?);
+    let extra_len = usize::from(u16_at(header, 28)?);
+    let data_off = header_end
+        .checked_add(name_len + extra_len)
+        .ok_or_else(|| Error::new(format!("truncated zip entry {}", item.entry.name)))?;
+    let comp_len = usize::try_from(item.compressed_size).map_err(|_| {
+        Error::new(format!(
+            "compressed size for {} is too large",
+            item.entry.name
+        ))
+    })?;
     let data_end = data_off
         .checked_add(comp_len)
         .ok_or_else(|| Error::new(format!("truncated zip entry {}", item.entry.name)))?;
     let compressed = apk
         .get(data_off..data_end)
         .ok_or_else(|| Error::new(format!("truncated zip entry {}", item.entry.name)))?;
-    match item.method {
-        0 => Ok(compressed.to_vec()),
+    let expected = usize::try_from(item.entry.size)
+        .map_err(|_| Error::new(format!("size for {} is too large", item.entry.name)))?;
+    let data = match item.method {
+        0 => {
+            if compressed.len() != expected {
+                bail!(
+                    "size mismatch for {}: expect {expected}, got {}",
+                    item.entry.name,
+                    compressed.len()
+                );
+            }
+            compressed.to_vec()
+        }
         8 => {
             let mut out = Vec::new();
             DeflateDecoder::new(compressed)
-                .take(limit)
+                .take(item.entry.size + 1)
                 .read_to_end(&mut out)
                 .map_err(|source| Error::Io {
                     action: "inflate",
                     path: std::path::PathBuf::from(&item.entry.name),
                     source,
                 })?;
-            Ok(out)
+            if out.len() > expected {
+                bail!(
+                    "zip entry {} inflates past {expected} bytes",
+                    item.entry.name
+                );
+            }
+            out
         }
         other => bail!(
             "unsupported compression method {other} for {}",
             item.entry.name
         ),
+    };
+    if data.len() != expected {
+        bail!(
+            "size mismatch for {}: expect {expected}, got {}",
+            item.entry.name,
+            data.len()
+        );
     }
+    Ok(data)
 }
 
 fn cd_bounds(apk: &[u8]) -> Result<(usize, usize)> {

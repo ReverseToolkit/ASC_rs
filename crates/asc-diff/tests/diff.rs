@@ -1,6 +1,8 @@
+use std::io::Write;
 use std::path::Path;
 
 use asc_diff::{Archive, ArchiveDiff, Group};
+use flate2::{write::DeflateEncoder, Compression};
 
 fn store_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
     let mut locals = Vec::new();
@@ -55,6 +57,88 @@ fn store_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
     archive.extend_from_slice(&cd_off.to_le_bytes());
     archive.extend_from_slice(&0u16.to_le_bytes());
     archive
+}
+
+fn deflated_zip(name: &str, bytes: &[u8]) -> Vec<u8> {
+    let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(bytes).unwrap();
+    let compressed = encoder.finish().unwrap();
+    let mut archive = store_zip(&[(name, bytes)]);
+    let payload_off = 30 + name.len();
+    archive.splice(
+        payload_off..payload_off + bytes.len(),
+        compressed.iter().copied(),
+    );
+    let cd_off = payload_off + compressed.len();
+    let compressed_size = u32::try_from(compressed.len()).unwrap().to_le_bytes();
+    archive[8..10].copy_from_slice(&8u16.to_le_bytes());
+    archive[18..22].copy_from_slice(&compressed_size);
+    archive[cd_off + 10..cd_off + 12].copy_from_slice(&8u16.to_le_bytes());
+    archive[cd_off + 20..cd_off + 24].copy_from_slice(&compressed_size);
+    let eocd = archive.len() - 22;
+    archive[eocd + 16..eocd + 20].copy_from_slice(&u32::try_from(cd_off).unwrap().to_le_bytes());
+    archive
+}
+
+#[test]
+fn archive_reader_rejects_incorrect_declared_sizes() {
+    let name = "assets/test.txt";
+    let dir = std::env::temp_dir().join(format!("asc-diff-sizes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (index, valid) in [
+        store_zip(&[(name, b"abcdef")]),
+        deflated_zip(name, b"abcdef"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for size in [0u32, 3, 7] {
+            let mut bytes = valid.clone();
+            let eocd = bytes.len() - 22;
+            let cd_off = usize::try_from(u32::from_le_bytes(
+                bytes[eocd + 16..eocd + 20].try_into().unwrap(),
+            ))
+            .unwrap();
+            bytes[cd_off + 24..cd_off + 28].copy_from_slice(&size.to_le_bytes());
+            let path = dir.join(format!("{index}-{size}.zip"));
+            std::fs::write(&path, bytes).unwrap();
+            let err = Archive::open(&path).unwrap().read(name).unwrap_err();
+            assert!(err.to_string().contains(name), "{err}");
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn archive_reader_preserves_complete_and_empty_entries() {
+    let name = "assets/test.txt";
+    let dir = std::env::temp_dir().join(format!("asc-diff-complete-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for payload in [b"abcdef".as_slice(), b""] {
+        for (index, bytes) in [store_zip(&[(name, payload)]), deflated_zip(name, payload)]
+            .into_iter()
+            .enumerate()
+        {
+            let path = dir.join(format!("{index}-{}.zip", payload.len()));
+            std::fs::write(&path, bytes).unwrap();
+            assert_eq!(Archive::open(&path).unwrap().read(name).unwrap(), payload);
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn archive_reader_rejects_invalid_local_headers() {
+    let name = "assets/test.txt";
+    let dir = std::env::temp_dir().join(format!("asc-diff-local-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut bytes = store_zip(&[(name, b"abcdef")]);
+    bytes[0] = 0;
+    let path = dir.join("bad.zip");
+    std::fs::write(&path, bytes).unwrap();
+    let err = Archive::open(&path).unwrap().read(name).unwrap_err();
+    assert!(err.to_string().contains("local header"), "{err}");
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 fn write_pair(
