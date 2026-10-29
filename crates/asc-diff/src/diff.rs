@@ -408,10 +408,11 @@ fn archive_member<'a>(archive: &'a Archive, exact: &[&str], suffixes: &[&str]) -
 }
 
 fn manifest_text(bytes: &[u8]) -> Result<String> {
-    if bytes.len() >= 2 && bytes[0] == 0x03 && bytes[1] == 0x00 {
-        return asc_axml::xml_text(bytes).map_err(|err| crate::Error::new(err.to_string()));
+    let text = String::from_utf8_lossy(bytes);
+    if text.trim_start().starts_with('<') {
+        return Ok(text.into_owned());
     }
-    Ok(String::from_utf8_lossy(bytes).into_owned())
+    asc_axml::manifest_xml(bytes).map_err(|err| crate::Error::new(err.to_string()))
 }
 
 fn quoted_attr(text: &str, name: &str) -> Option<String> {
@@ -458,7 +459,9 @@ fn write_export(
     side_dir: &Path,
 ) -> Result<()> {
     let bytes = archive.read(member)?;
-    let payload = if is_xml_name(restored) {
+    let payload = if Group::of(restored) == Group::Manifest {
+        apply_symbols(&manifest_text(&bytes)?, symbols).into_bytes()
+    } else if is_xml_name(restored) {
         decoded_xml(&bytes, symbols).map(Vec::from).unwrap_or(bytes)
     } else {
         bytes

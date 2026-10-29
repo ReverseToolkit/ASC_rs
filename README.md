@@ -19,7 +19,7 @@ ZIP 支持 store、deflate、数据描述符和 ZIP64。中央目录里任何一
 
 ## 构建
 
-需要 Rust 1.74 或更新版本。
+需要 Rust 1.88 或更新版本，与当前锁定依赖的最低要求一致。
 
 ```sh
 cargo test --workspace --locked
@@ -142,6 +142,8 @@ APK、AAB、HAP 自带资源表。裸 DEX 和裸 ABC 默认不解析资源；`--
 - `lib/` 或 `libs/` 下 CRC 变了的 `.so` 会再比 ELF 头、`DT_NEEDED`、导入和导出符号。节表和程序头都读，两边不一致时用程序头。虚拟地址相同的可执行段里的字节差，以及新增或删除的导出，会各反汇编一小段（x86、x86_64 的 NASM，以及 AArch64）。链接基址整段挪动时，不把相对跳转当成代码改动。
 
 `-o DIR` 把变化、新增和删除的文件写到 `DIR/<versionCode>`，左右包各用自己的 versionCode。XML 用还原后的路径和可读文本。
+
+AAB 从 `base/manifest/AndroidManifest.xml` 的 protobuf 清单读取 versionCode，导出的清单同样转为可读 XML。
 
 ## Agent skill
 

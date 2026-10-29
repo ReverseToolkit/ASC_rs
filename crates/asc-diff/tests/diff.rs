@@ -632,6 +632,78 @@ fn export_writes_both_sides_as_decoded_xml() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+fn push_varint(out: &mut Vec<u8>, mut value: u64) {
+    while value >= 0x80 {
+        out.push(u8::try_from(value & 0x7f).unwrap() | 0x80);
+        value >>= 7;
+    }
+    out.push(u8::try_from(value).unwrap());
+}
+
+fn proto_bytes(field: u32, bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    push_varint(&mut out, u64::from(field) << 3 | 2);
+    push_varint(&mut out, u64::try_from(bytes.len()).unwrap());
+    out.extend_from_slice(bytes);
+    out
+}
+
+fn protobuf_manifest(version_code: u32) -> Vec<u8> {
+    let uri = b"http://schemas.android.com/apk/res/android";
+    let mut namespace = proto_bytes(1, b"android");
+    namespace.extend(proto_bytes(2, uri));
+    let mut primitive = vec![6 << 3];
+    push_varint(&mut primitive, u64::from(version_code));
+    let item = proto_bytes(7, &primitive);
+    let mut attribute = proto_bytes(1, uri);
+    attribute.extend(proto_bytes(2, b"versionCode"));
+    attribute.extend(proto_bytes(6, &item));
+    let mut manifest = proto_bytes(1, &namespace);
+    manifest.extend(proto_bytes(3, b"manifest"));
+    manifest.extend(proto_bytes(4, &attribute));
+    proto_bytes(1, &manifest)
+}
+
+#[test]
+fn aab_export_decodes_protobuf_manifests_and_uses_compiled_version_codes() {
+    let dir = std::env::temp_dir().join(format!("asc-diff-aab-export-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest_path = "base/manifest/AndroidManifest.xml";
+    let (left, right) = write_pair(
+        &dir,
+        &[
+            (manifest_path, &protobuf_manifest(10)),
+            ("assets/gone.txt", b"old"),
+        ],
+        &[
+            (manifest_path, &protobuf_manifest(20)),
+            ("assets/new.txt", b"new"),
+        ],
+    );
+    let left_archive = Archive::open(&left).unwrap();
+    let right_archive = Archive::open(&right).unwrap();
+    let diff = ArchiveDiff::between(&left_archive, &right_archive);
+    let out = dir.join("out");
+    diff.export(&left_archive, &right_archive, &out).unwrap();
+    for code in [10, 20] {
+        let xml = std::fs::read_to_string(out.join(code.to_string()).join(manifest_path)).unwrap();
+        assert!(xml.starts_with("<?xml"), "{xml}");
+        assert!(
+            xml.contains(&format!("android:versionCode=\"{code}\"")),
+            "{xml}"
+        );
+    }
+    assert_eq!(
+        std::fs::read(out.join("10/assets/gone.txt")).unwrap(),
+        b"old"
+    );
+    assert_eq!(
+        std::fs::read(out.join("20/assets/new.txt")).unwrap(),
+        b"new"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 fn binary_layout(label: &str) -> Vec<u8> {
     fn push_u16(buf: &mut Vec<u8>, value: u16) {
         buf.extend_from_slice(&value.to_le_bytes());
