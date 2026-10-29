@@ -35,6 +35,11 @@ for exact syntax and query semantics.
 ignore it. A bare DEX or ABC does not resolve resource values unless the user
 passes `--resources`. Do not invent a resource path.
 
+For ABC and HAP, `--abc-output source` (default) reconstructs JavaScript through
+the native Rust xpanda core. Choose `--abc-output asm` to inspect original Ark
+instructions, jump labels, and exception tables. `dump` uses `.js` and `.pa`
+respectively. Node is not required to run either mode.
+
 - Keep `ddc` (the default) when readable Java with reconstructed control flow
   is enough.
 - Use `smali` when the user wants baksmali, or when a `ddc` body looks wrong

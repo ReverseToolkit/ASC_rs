@@ -1,0 +1,13 @@
+[package]
+name = "asc-abc-dec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native Rust Ark ABC disassembler and decompiler adapted from xpanda-core"
+
+[dependencies]
+asc-abc.workspace = true
+oxc = { version = "=0.75.0", default-features = false, features = ["ast_visit", "codegen", "semantic", "minifier"] }
+thiserror.workspace = true

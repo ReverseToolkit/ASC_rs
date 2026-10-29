@@ -48,6 +48,16 @@ struct Region {
 }
 
 impl<'a> Abc<'a> {
+    /// The validated file buffer, borrowed for instruction and metadata readers.
+    pub fn data(&self) -> &'a [u8] {
+        self.data
+    }
+
+    /// Locate a class using the same descriptor normalization as class queries.
+    pub fn class_offset(&self, query: &str) -> Result<Option<u32>> {
+        self.find_class_off(query)
+    }
+
     pub fn parse(data: &'a [u8]) -> Result<Self> {
         if data.len() < HEADER_SIZE || &data[..8] != b"PANDA\0\0\0" {
             bail!("invalid ABC header");

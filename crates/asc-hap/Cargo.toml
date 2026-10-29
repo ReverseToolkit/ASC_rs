@@ -9,6 +9,7 @@ description = "HarmonyOS HAP access for ASC"
 
 [dependencies]
 asc-abc.workspace = true
+asc-abc-dec.workspace = true
 crc32fast.workspace = true
 flate2.workspace = true
 memmap2.workspace = true

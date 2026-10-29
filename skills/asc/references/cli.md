@@ -18,7 +18,7 @@ of those. `getmanifest` does not: a bare DEX or ABC has no manifest.
 ## Decompile one class
 
 ```text
-asc getclass [--debug] [--threads N] [--engine ddc|smali] [--resources FILE] [-o FILE] <input> CLASS
+asc getclass [--debug] [--threads N] [--engine ddc|smali] [--abc-output source|asm] [--resources FILE] [-o FILE] <input> CLASS
 ```
 
 `CLASS` accepts `com.example.Main` or `Lcom/example/Main;`.
@@ -28,8 +28,9 @@ asc getclass [--debug] [--threads N] [--engine ddc|smali] [--resources FILE] [-o
   replaced from the package resource table.
 - `smali` prints baksmali for APK and AAB and leaves resource tokens as they
   are in the DEX.
-- `--engine` applies to APK, AAB, and bare DEX. HAP and ABC print Ark class
-  text and ignore it.
+- `--engine` applies to APK, AAB, and bare DEX. HAP and ABC use
+  `--abc-output source` (default) for native Rust JavaScript reconstruction, or
+  `--abc-output asm` for Ark instructions, labels, and exception tables.
 - A bare DEX or ABC keeps resource tokens unless `--resources` is set. For a
   DEX that file is `resources.arsc`. For an ABC it is a `resources` directory
   or a HAP that contains one. APK, AAB, and HAP already carry their own
@@ -44,13 +45,13 @@ asc getclass [--debug] [--threads N] [--engine ddc|smali] [--resources FILE] [-o
 Examples:
 
 ```text
-asc getclass app.apk Lcom/example/Main;
+asc getclass app.apk 'Lcom/example/Main;'
 asc getclass app.apk com.example.Main --threads 16
 asc getclass --engine smali -o Main.smali app.apk com.example.Main
 asc getclass app.hap com.example.Main
-asc getclass classes.dex Lcom/example/Main;
-asc getclass classes.dex Lcom/example/Main; --resources resources.arsc
-asc getclass modules.abc Ldemo/App; --resources resources
+asc getclass classes.dex 'Lcom/example/Main;'
+asc getclass classes.dex 'Lcom/example/Main;' --resources resources.arsc
+asc getclass modules.abc 'Ldemo/App;' --resources resources
 ```
 
 ## Find bytecode references
@@ -107,7 +108,7 @@ Examples:
 
 ```text
 asc findrefs app.apk string token -o string_refs.txt
-asc findrefs app.apk type Lcom/example/Main;
+asc findrefs app.apk type 'Lcom/example/Main;'
 asc findrefs app.apk method onCreate --class com.example.Main
 asc findrefs app.apk method notify --class MainActivity --fuzzy-class
 asc findrefs app.apk field apiKey
@@ -157,13 +158,14 @@ asc listclass app.apk
 ## Export every class
 
 ```text
-asc dump [--debug] [--threads N] [--engine ddc|smali] [--resources FILE] -o DIR <input>
+asc dump [--debug] [--threads N] [--engine ddc|smali] [--abc-output source|asm] [--resources FILE] -o DIR <input>
 ```
 
 Use this only when the user explicitly wants the whole package. `-o` is
 required and is a directory. APK and AAB output is a Java or smali tree plus
-`AndroidManifest.xml`. HAP output is the Ark class tree. A bare DEX writes
-the class tree without a manifest. A bare ABC writes the Ark class tree.
+`AndroidManifest.xml`. HAP and bare ABC output a `.js` record tree by default,
+or `.pa` assembly files with `--abc-output asm`. A bare DEX writes the class
+tree without a manifest. HAP also exports its module/config metadata.
 `--resources` follows the same rule as `getclass`.
 The stderr summary is `dumped <classes> classes (<errors> errors) -> <dir>`.
 Report both numbers. A per-class failure is counted in `errors` and does not

@@ -20,6 +20,7 @@ asc-dex = { path = "crates/asc-dex" }
 asc-axml = { path = "crates/asc-axml" }
 asc-apk = { path = "crates/asc-apk" }
 asc-abc = { path = "crates/asc-abc" }
+asc-abc-dec = { path = "crates/asc-abc-dec" }
 asc-hap = { path = "crates/asc-hap" }
 asc-diff = { path = "crates/asc-diff" }
 asc-so = { path = "crates/asc-so" }

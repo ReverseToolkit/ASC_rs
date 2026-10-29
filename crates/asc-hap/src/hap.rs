@@ -13,6 +13,7 @@ use crate::{Error, Result};
 use asc_abc::{
     class_names, class_text_optional, find_members, find_strings_resolved, find_types, MemberKind,
 };
+use asc_abc_dec::{Decompiler, OutputMode};
 
 /// Ceiling on one inflated ZIP entry. A real `.abc` stays far below it, and a
 /// crafted entry can never make the reader allocate without bound.
@@ -80,16 +81,42 @@ pub fn list_classes(path: &Path, prefix: Option<&str>, options: &Options) -> Res
 }
 
 pub fn get_class_source(path: &Path, class_name: &str, options: &Options) -> Result<String> {
+    get_class_output_impl(path, class_name, options, None)
+}
+
+/// Read one ABC record as JavaScript source or Ark assembly.
+pub fn get_class_output(
+    path: &Path,
+    class_name: &str,
+    options: &Options,
+    mode: OutputMode,
+) -> Result<String> {
+    get_class_output_impl(path, class_name, options, Some(mode))
+}
+
+fn abc_output(data: &[u8], class_name: &str, mode: Option<OutputMode>) -> Result<Option<String>> {
+    match mode {
+        Some(mode) => Ok(Decompiler::new(data)?.render_class_optional(class_name, mode)?),
+        None => Ok(class_text_optional(data, class_name)?),
+    }
+}
+
+fn get_class_output_impl(
+    path: &Path,
+    class_name: &str,
+    options: &Options,
+    mode: Option<OutputMode>,
+) -> Result<String> {
     check_threads(options.threads)?;
     let (_file, map) = open_hap(path)?;
     let entries = zip_entries(&map)?;
     for entry in ranked_code(&entries) {
         let bytes = inflate(&map, entry)?;
-        if let Some(text) = class_text_optional(&bytes, class_name)? {
+        if let Some(text) = abc_output(&bytes, class_name, mode)? {
             if options.debug {
                 eprintln!("[HAP] hit {}", entry.name);
             }
-            if text.as_bytes().contains(&b'$') {
+            if mode != Some(OutputMode::Assembly) && text.as_bytes().contains(&b'$') {
                 let resources = crate::resources::HapResources::index(&map, &entries);
                 return Ok(resources.annotate(&text).into_owned());
             }
@@ -262,12 +289,31 @@ pub fn dump_abc(
     out_dir: &Path,
     resources: &crate::resources::HapResources,
 ) -> Result<DumpStats> {
+    dump_abc_impl(data, out_dir, resources, None)
+}
+
+pub fn dump_abc_with_mode(
+    data: &[u8],
+    out_dir: &Path,
+    resources: &crate::resources::HapResources,
+    mode: OutputMode,
+) -> Result<DumpStats> {
+    dump_abc_impl(data, out_dir, resources, Some(mode))
+}
+
+fn dump_abc_impl(
+    data: &[u8],
+    out_dir: &Path,
+    resources: &crate::resources::HapResources,
+    mode: Option<OutputMode>,
+) -> Result<DumpStats> {
     fs::create_dir_all(out_dir)?;
     let names = class_names(data, None)?;
     let mut classes = 0usize;
     let mut errors = 0usize;
     for name in names {
-        let text = match class_text_optional(data, &name) {
+        let text = match abc_output(data, &name, mode) {
+            Ok(Some(text)) if mode == Some(OutputMode::Assembly) => text,
             Ok(Some(text)) => resources.annotate(&text).into_owned(),
             Ok(None) => {
                 errors += 1;
@@ -280,7 +326,11 @@ pub fn dump_abc(
                 continue;
             }
         };
-        let dest = class_output_path(out_dir, &name);
+        let dest = class_output_path_with_extension(
+            out_dir,
+            &name,
+            mode.map(OutputMode::extension).unwrap_or("ets"),
+        );
         if let Some(parent) = dest.parent() {
             if let Err(err) = fs::create_dir_all(parent) {
                 errors += 1;
@@ -317,6 +367,24 @@ where
 }
 
 pub fn dump_hap(path: &Path, out_dir: &Path, options: &Options) -> Result<DumpStats> {
+    dump_hap_impl(path, out_dir, options, None)
+}
+
+pub fn dump_hap_with_mode(
+    path: &Path,
+    out_dir: &Path,
+    options: &Options,
+    mode: OutputMode,
+) -> Result<DumpStats> {
+    dump_hap_impl(path, out_dir, options, Some(mode))
+}
+
+fn dump_hap_impl(
+    path: &Path,
+    out_dir: &Path,
+    options: &Options,
+    mode: Option<OutputMode>,
+) -> Result<DumpStats> {
     check_threads(options.threads)?;
     fs::create_dir_all(out_dir)?;
     let (_file, map) = open_hap(path)?;
@@ -362,7 +430,7 @@ pub fn dump_hap(path: &Path, out_dir: &Path, options: &Options) -> Result<DumpSt
             }
         };
         for name in names {
-            let text = match class_text_optional(&bytes, &name) {
+            let text = match abc_output(&bytes, &name, mode) {
                 Ok(Some(text)) => text,
                 // The name came from this file, so not finding it again means
                 // the index and the class body disagree.
@@ -377,7 +445,11 @@ pub fn dump_hap(path: &Path, out_dir: &Path, options: &Options) -> Result<DumpSt
                     continue;
                 }
             };
-            let dest = class_output_path(out_dir, &name);
+            let dest = class_output_path_with_extension(
+                out_dir,
+                &name,
+                mode.map(OutputMode::extension).unwrap_or("ets"),
+            );
             if let Some(parent) = dest.parent() {
                 if let Err(err) = fs::create_dir_all(parent) {
                     errors += 1;
@@ -385,7 +457,12 @@ pub fn dump_hap(path: &Path, out_dir: &Path, options: &Options) -> Result<DumpSt
                     continue;
                 }
             }
-            match fs::write(&dest, resources.annotate(&text).as_bytes()) {
+            let text = if mode == Some(OutputMode::Assembly) {
+                text
+            } else {
+                resources.annotate(&text).into_owned()
+            };
+            match fs::write(&dest, text) {
                 Ok(()) => classes += 1,
                 Err(err) => {
                     errors += 1;
@@ -494,7 +571,12 @@ fn pack_info_rank(name: &str) -> Option<u8> {
 /// Sanitizing alone is not injective: two descriptors can differ only in a
 /// character that has to be replaced. A changed part carries a short hash of
 /// the original so they stay distinct files.
+#[cfg(test)]
 fn class_output_path(out_dir: &Path, descriptor: &str) -> PathBuf {
+    class_output_path_with_extension(out_dir, descriptor, "ets")
+}
+
+fn class_output_path_with_extension(out_dir: &Path, descriptor: &str, extension: &str) -> PathBuf {
     let trimmed = descriptor
         .strip_prefix('L')
         .unwrap_or(descriptor)
@@ -502,13 +584,13 @@ fn class_output_path(out_dir: &Path, descriptor: &str) -> PathBuf {
         .unwrap_or(descriptor);
     let mut path = out_dir.to_path_buf();
     if trimmed.is_empty() {
-        path.push("class.ets");
+        path.push(format!("class.{extension}"));
         return path;
     }
     for part in trimmed.split('/') {
         path.push(sanitize_part(part));
     }
-    path.set_extension("ets");
+    path.set_extension(extension);
     path
 }
 

@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use clap::{Args, CommandFactory, Parser, Subcommand};
 
 use asc_abc::{
-    class_names, class_text, find_members, find_strings, find_strings_resolved, find_types, is_abc,
-    MemberKind,
+    class_names, find_members, find_strings, find_strings_resolved, find_types, is_abc, MemberKind,
 };
+use asc_abc_dec::{Decompiler as AbcDecompiler, OutputMode as AbcOutputMode};
 use asc_apk::{
     dump_apk, find_refs, get_class_source, is_dex, list_classes, manifest_xml, packaged_resources,
     Engine, Error, MemberSel, Options, RefQuery, Result,
@@ -21,7 +21,7 @@ use asc_hap::{self, Query};
     about = "ASC tooling entry.",
     after_help = "\
 examples:
-  asc getclass app.apk Lcom/poc/Main; -o Main.java
+  asc getclass app.apk 'Lcom/poc/Main;' -o Main.java
   asc getclass app.apk com.poc.Main --threads 16
   asc getclass app.apk com.poc.Main --engine smali
   asc listclass app.apk -o classes.txt
@@ -34,20 +34,24 @@ examples:
   asc findrefs app.apk method notify --class MainActivity --fuzzy-class -o method_refs.txt
   asc findrefs app.apk field apiKey -o field_refs.txt
   asc getclass app.hap com.poc.Main
+  asc getclass app.hap com.poc.Main --abc-output asm
   asc listclass app.hap --prefix com.poc -o classes.txt
   asc getmanifest app.hap -o module.json
   asc dump app.hap -o output
   asc findrefs app.hap string token
   asc findrefs app.hap method onCreate --class com.poc.Main
-  asc getclass classes.dex Lcom/example/Main;
-  asc getclass classes.dex Lcom/example/Main; --resources resources.arsc
-  asc getclass modules.abc Ldemo/App;
-  asc getclass modules.abc Ldemo/App; --resources resources
+  asc getclass classes.dex 'Lcom/example/Main;'
+  asc getclass classes.dex 'Lcom/example/Main;' --resources resources.arsc
+  asc getclass modules.abc 'Ldemo/App;'
+  asc getclass modules.abc 'Ldemo/App;' --abc-output source
+  asc dump modules.abc -o output --abc-output asm
+  asc getclass modules.abc 'Ldemo/App;' --resources resources
   asc findrefs modules.abc string token --resources app.hap
 
 HAP commands read ets/modules.abc and other .abc members. getmanifest prints
 module.json, or config.json when that file is absent, plus pack.info.
 --engine applies to APK and bare DEX getclass and dump only.
+--abc-output selects source (default) or asm for ABC and HAP getclass/dump.
 A bare DEX or ABC file does not resolve resources unless --resources is set.
 DEX uses a resources.arsc file. ABC uses a resources directory or a HAP.
 findrefs exits 2 when a DEX entry could not be searched; other hits are still printed.
@@ -75,6 +79,23 @@ enum EngineArg {
     Ddc,
     /// Baksmali text.
     Smali,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum AbcOutputArg {
+    /// JavaScript reconstructed by the native Rust xpanda core.
+    Source,
+    /// Ark instruction mnemonics, operands, labels, and exception tables.
+    Asm,
+}
+
+impl From<AbcOutputArg> for AbcOutputMode {
+    fn from(arg: AbcOutputArg) -> Self {
+        match arg {
+            AbcOutputArg::Source => Self::Source,
+            AbcOutputArg::Asm => Self::Assembly,
+        }
+    }
 }
 
 fn default_threads() -> usize {
@@ -132,6 +153,9 @@ impl CacheArgs {
 enum Commands {
     /// Decompile one class from an APK, DEX, HAP, or ABC.
     Getclass {
+        /// Output for ABC/HAP records: reconstructed JavaScript or Ark assembly.
+        #[arg(long, value_enum, default_value = "source")]
+        abc_output: AbcOutputArg,
         #[arg(long)]
         debug: bool,
         #[arg(long, alias = "thread", default_value_t = default_threads())]
@@ -174,6 +198,9 @@ enum Commands {
     },
     /// Decompile every class in an APK, DEX, HAP, or ABC.
     Dump {
+        /// Output for ABC/HAP records: .js source files or .pa assembly files.
+        #[arg(long, value_enum, default_value = "source")]
+        abc_output: AbcOutputArg,
         #[arg(long)]
         debug: bool,
         #[arg(long, alias = "thread", default_value_t = default_threads())]
@@ -323,6 +350,7 @@ enum Exit {
 fn execute(cli: Cli) -> Result<Exit> {
     match cli.command {
         Commands::Getclass {
+            abc_output,
             debug,
             threads,
             engine,
@@ -333,13 +361,26 @@ fn execute(cli: Cli) -> Result<Exit> {
             cache,
         } => {
             let source = if let Some(data) = read_abc(&apk_path)? {
-                let text = class_text(&data, &dalvik_class).map_err(abc_err)?;
+                let mode = AbcOutputMode::from(abc_output);
+                let text = AbcDecompiler::new(&data)
+                    .map_err(Error::external)?
+                    .render_class(&dalvik_class, mode)
+                    .map_err(Error::external)?;
                 let table = abc_resources(resources.as_deref())?;
-                table.annotate(&text).into_owned()
+                if mode == AbcOutputMode::Assembly {
+                    text
+                } else {
+                    table.annotate(&text).into_owned()
+                }
             } else if hap_file(&apk_path)? {
                 archive_resources(resources.as_deref())?;
-                asc_hap::get_class_source(&apk_path, &dalvik_class, &hap_options(threads, debug))
-                    .map_err(hap_err)?
+                asc_hap::get_class_output(
+                    &apk_path,
+                    &dalvik_class,
+                    &hap_options(threads, debug),
+                    abc_output.into(),
+                )
+                .map_err(hap_err)?
             } else {
                 get_class_source(
                     &apk_path,
@@ -407,6 +448,7 @@ fn execute(cli: Cli) -> Result<Exit> {
             }
         }
         Commands::Dump {
+            abc_output,
             debug,
             threads,
             engine,
@@ -417,7 +459,8 @@ fn execute(cli: Cli) -> Result<Exit> {
         } => {
             if let Some(data) = read_abc(&apk_path)? {
                 let table = abc_resources(resources.as_deref())?;
-                let stats = asc_hap::dump_abc(&data, &output, &table).map_err(hap_err)?;
+                let stats = asc_hap::dump_abc_with_mode(&data, &output, &table, abc_output.into())
+                    .map_err(hap_err)?;
                 eprintln!(
                     "dumped {} classes ({} errors) -> {}",
                     stats.classes,
@@ -428,8 +471,13 @@ fn execute(cli: Cli) -> Result<Exit> {
             }
             if hap_file(&apk_path)? {
                 archive_resources(resources.as_deref())?;
-                let stats = asc_hap::dump_hap(&apk_path, &output, &hap_options(threads, debug))
-                    .map_err(hap_err)?;
+                let stats = asc_hap::dump_hap_with_mode(
+                    &apk_path,
+                    &output,
+                    &hap_options(threads, debug),
+                    abc_output.into(),
+                )
+                .map_err(hap_err)?;
                 eprintln!(
                     "dumped {} classes ({} errors) -> {}",
                     stats.classes,

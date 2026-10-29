@@ -11,3 +11,14 @@ Default DEX decompilation uses ddc and jdc-core by ejfkdev, both under the
 MIT license:
 https://github.com/ejfkdev/ddc
 https://github.com/ejfkdev/jdc-core
+
+ABC disassembly and decompilation in asc-abc-dec are adapted from xpanda-core
+by jmp0, revision 3ffb7b476b17066dc8bed0914caeea1f529b1e51, under Apache-2.0:
+https://github.com/asmjmp0/xpanda
+
+Native JavaScript AST parsing, printing, and dead-code elimination use Oxc
+by the Oxc contributors, under the MIT license:
+https://github.com/oxc-project/oxc
+
+The generated Ark instruction definitions derive from OpenHarmony's ISA:
+Copyright (c) 2021-2026 Huawei Device Co., Ltd., under Apache-2.0.

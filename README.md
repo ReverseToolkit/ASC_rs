@@ -30,24 +30,27 @@ cargo build --release
 ## 命令
 
 ```text
-asc getclass app.apk Lcom/poc/Main; -o Main.java
+asc getclass app.apk 'Lcom/poc/Main;' -o Main.java
 asc getclass app.apk com.poc.Main --threads 16
 asc getclass app.apk com.poc.Main --engine smali
 asc listclass app.apk --prefix com.poc -o classes.txt
 asc getmanifest app.apk -o AndroidManifest.xml
 asc dump app.apk -o output
 asc findrefs app.apk string token -o string_refs.txt
-asc findrefs app.apk type Lcom/poc/Main;
+asc findrefs app.apk type 'Lcom/poc/Main;'
 asc findrefs app.apk method onCreate --class com.poc.Main
 asc findrefs app.apk method notify --class MainActivity --fuzzy-class
 asc findrefs app.apk field apiKey
 asc getclass app.hap com.poc.Main
+asc getclass app.hap com.poc.Main --abc-output asm
 asc listclass app.hap --prefix com.poc
 asc getmanifest app.hap -o module.json
 asc dump app.hap -o output
 asc findrefs app.hap string token
-asc getclass classes.dex Lcom/example/Main; --resources resources.arsc
-asc getclass modules.abc Ldemo/App; --resources resources
+asc getclass classes.dex 'Lcom/example/Main;' --resources resources.arsc
+asc getclass modules.abc 'Ldemo/App;' --resources resources
+asc getclass modules.abc 'Ldemo/App;' --abc-output source
+asc dump modules.abc -o output --abc-output asm
 asc diff old.apk new.apk
 asc diff --prefix assets/ old.apk new.apk -o diff-out
 asc skills install
@@ -78,7 +81,11 @@ dumped 120 classes (2 errors) -> output
 | `ddc`（默认） | [ddc](https://github.com/ejfkdev/ddc) / `jdc-core` 重构控制流后的 Java，并改写资源引用 |
 | `smali` | baksmali 文本，保留指令名和寄存器，不改写资源引用 |
 
-HAP 和 ABC 忽略 `--engine`，始终打印 Ark 类文本。`listclass`、`findrefs`、`getmanifest` 不走反编译器。
+HAP 和 ABC 用 `--abc-output` 选择输出：`source`（默认）通过 Rust 的 `asc-abc-dec` 恢复 JavaScript；`asm` 打印 Ark 指令、操作数、跳转标签和异常表。`dump` 分别导出 `.js` 和 `.pa` 文件。`--engine` 仍只作用于 DEX。`listclass`、`findrefs`、`getmanifest` 不走反编译器。
+
+ABC 反编译移植了 [xpanda-core](https://github.com/asmjmp0/xpanda) 必要的字节码解析、指令语义、模块与字面量、函数与类、控制流生成路径。指令表来自上游 24.0.0.0 ISA（332 条定义），兼容其 13.0.1.0 样本。Rust 原生的 Oxc AST 优化流程会折叠寄存器复制、恢复闭包变量、类字段与访问器、对象字面量和直接方法调用，并生成 `if` / `while` / `try` / `catch` / `finally`。复杂控制流仍可保留显式分派器。运行时只需 Rust 编译出的程序，不调用 Node、TypeScript 或 Babel。未实现语义的指令会返回明确错误，仍可选择汇编查看原始指令。
+
+可读性与行为回归覆盖上游 class、MD5、AES 以及真实 24.0.0.0 ABC 中的 AppLog、GamePage；后两者恢复为直接的类与方法，去掉函数工厂和控制流分派器。测试还检查 getter 与参数求值顺序、循环、异常边界和闭包捕获。Node 仅用作可选测试解释器。
 
 同名类按运行时顺序保留：`classes.dex`、`classes2.dex`、`classes10.dex`，其余根目录 DEX 按中央目录顺序排在后面。AAB 的代码在 `<module>/dex/*.dex`，清单在 `base/manifest/AndroidManifest.xml`；同名类先保留 `base` 模块。
 
@@ -168,6 +175,7 @@ asc skills install
 | `asc-axml` | 二进制 XML 和 AAB protobuf 清单 |
 | `asc-hap` | HarmonyOS HAP |
 | `asc-abc` | 方舟 ABC，按文件头现查，不建全量索引 |
+| `asc-abc-dec` | xpanda 必要核心的 Rust 移植，ABC 汇编和 JavaScript 反编译 |
 | `asc-diff` | 按路径和 CRC 对比两个 ZIP |
 | `asc-so` | ELF 比较和反汇编 |
 
@@ -177,7 +185,10 @@ asc skills install
 - `getclass` 和 `dump` 默认调用 ddc 重构控制流。`--engine smali` 打印标准 smali。
 - `findrefs` 同时命中多个 DEX 时，结果按压缩后体积排序，避免多线程完成顺序抖动。
 - 增加 HAP / ABC、裸 DEX / ABC、`diff` 和 `skills install`。
+- ABC / HAP 的 `getclass` 和 `dump` 支持 JavaScript 反编译与 Ark 汇编选择。
 
 ## 许可
 
 Apache License 2.0。本仓库是 [MG1937/ASC](https://github.com/MG1937/ASC) 的衍生作品，见 `NOTICE`。默认 DEX 反编译使用 MIT 许可的 [ddc](https://github.com/ejfkdev/ddc) 和 [jdc-core](https://github.com/ejfkdev/jdc-core)。
+
+ABC 反编译的 `asc-abc-dec` 改写自 jmp0 的 [xpanda-core](https://github.com/asmjmp0/xpanda)（Apache-2.0）；指令定义沿用 OpenHarmony ISA（Huawei Device Co., Ltd., Apache-2.0）。来源修订和测试样本归属见 `NOTICE` 与 crate 内说明。
